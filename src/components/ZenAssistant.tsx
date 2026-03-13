@@ -1,36 +1,60 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { motion } from 'motion/react';
 import { Send, Sparkles, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { useTranslation } from '../i18n';
 
-export const ZenAssistant: React.FC = () => {
+import { handleUserPractice } from '../services/aiPracticeService';
+
+export const ZenAssistant: React.FC<{
+  user: any;
+  onLevelUp: (msg: string) => void;
+}> = ({ user, onLevelUp }) => {
+  const { t, language } = useTranslation();
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [selectedHeartMethod, setSelectedHeartMethod] = useState<string>('');
+  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string; timestamp: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('zen_assistant_history');
+    if (saved) setMessages(JSON.parse(saved));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('zen_assistant_history', JSON.stringify(messages));
+  }, [messages]);
+
+  const heartMethods = ['感恩心', '孝心', '菩提心', '平等心', '慈心', '悲心', '无常观'];
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
     const userMsg = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    const now = new Date().toLocaleString();
+    setMessages(prev => [...prev, { role: 'user', content: userMsg, timestamp: now }]);
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: userMsg,
-        config: {
-          systemInstruction: "你是一位智慧、慈悲且平和的禅修导师。你的回答应当充满禅意，简洁而深刻。你可以解释佛经、提供冥想建议、或者在用户感到焦虑时给予安慰。使用温暖、自然的语气。如果用户问及念经，你可以鼓励他们保持正念。",
-        },
-      });
-
-      setMessages(prev => [...prev, { role: 'assistant', content: response.text || '禅师正在冥想，请稍后再试。' }]);
+      const result = await handleUserPractice(
+        userMsg, 
+        user, 
+        { selected_heart_method: selectedHeartMethod, daily_streak: 5, userRole: user.role },
+        onLevelUp
+      );
+      
+      const responseNow = new Date().toLocaleString();
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: `《${result.card}》\n\n**禅意感悟**:\n${result.insight}\n\n**属性提升**:\n${result.bonus}\n\n**下一个原子习惯**:\n${result.next_habit}\n\n**转念提示**:\n${result.transform}${result.kshitigarbha ? `\n\n**${result.kshitigarbha.practice_label}**\n*${result.kshitigarbha.heart_earth_status}*\n\n> ${result.kshitigarbha.kshitigarbha_vow}\n\n${result.kshitigarbha.ai_coaching}\n\n*${result.kshitigarbha.dedication_ritual}*` : `\n\n**回向**:\n${result.ritual}`}`,
+        timestamp: responseNow
+      }]);
+      setSelectedHeartMethod('');
     } catch (error) {
       console.error('AI Error:', error);
-      setMessages(prev => [...prev, { role: 'assistant', content: '缘分未到，请稍后再试。' }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: t('zen_master_error'), timestamp: new Date().toLocaleString() }]);
     } finally {
       setIsLoading(false);
     }
@@ -38,19 +62,42 @@ export const ZenAssistant: React.FC = () => {
 
   return (
     <div className="flex flex-col h-[500px] bg-white rounded-3xl shadow-sm border border-zen-accent/10 overflow-hidden">
-      <div className="p-4 border-bottom border-zen-accent/5 bg-zen-bg/50 flex items-center gap-2">
-        <Sparkles className="w-4 h-4 text-zen-accent" />
-        <h3 className="text-sm font-semibold uppercase tracking-wider">禅修指引</h3>
+      <div className="p-4 border-bottom border-zen-accent/5 bg-zen-bg/50 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-zen-accent" />
+            <h3 className="text-sm font-semibold uppercase tracking-wider">{t('zen_assistant_title')}</h3>
+          </div>
+          {messages.length > 0 && (
+            <button 
+              onClick={() => setMessages([])}
+              className="text-xs text-zen-ink/40 hover:text-zen-ink transition-colors"
+            >
+              清空记录
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {heartMethods.map(method => (
+            <button
+              key={method}
+              onClick={() => setSelectedHeartMethod(method === selectedHeartMethod ? '' : method)}
+              className={`px-2 py-0.5 rounded-full text-xs ${selectedHeartMethod === method ? 'bg-zen-accent text-white' : 'bg-zen-bg text-zen-ink border border-zen-accent/10'}`}
+            >
+              {method}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="text-center py-10 text-zen-accent/40 italic text-sm">
-            “心如止水，鉴常明。”<br/>有什么困惑想与禅师聊聊吗？
+            <ReactMarkdown>{t('zen_assistant_placeholder')}</ReactMarkdown>
           </div>
         )}
         {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
             <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
               msg.role === 'user' 
                 ? 'bg-zen-accent text-white' 
@@ -58,6 +105,7 @@ export const ZenAssistant: React.FC = () => {
             }`}>
               <ReactMarkdown>{msg.content}</ReactMarkdown>
             </div>
+            <span className="text-[10px] text-zen-ink/40 mt-1 px-1">{msg.timestamp}</span>
           </div>
         ))}
         {isLoading && (
@@ -75,7 +123,7 @@ export const ZenAssistant: React.FC = () => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          placeholder="向禅师请教..."
+          placeholder={t('ask_zen_master')}
           className="flex-1 bg-zen-bg border-none rounded-full px-4 py-2 text-sm focus:ring-1 focus:ring-zen-accent outline-none"
         />
         <button

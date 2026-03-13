@@ -1,5 +1,7 @@
 {
-  "name": "Remix: 念经助手 (Chanting Assistant)",
+  "name": "禅心助手 (Chanting Assistant)",
   "description": "一个宁静的数字念经空间，包含电子木鱼、经文阅读， 禅修音频和AI禅修指导，功德记录。",
-  "requestFramePermissions": ["microphone"]
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

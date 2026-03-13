@@ -3,8 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Mic, MicOff, Volume2, VolumeX, Sparkles, Loader2, MessageCircle, X, Play, Pause } from 'lucide-react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { cn } from '../lib/utils';
+import { useTranslation } from '../i18n';
 
 export const LiveMeditation: React.FC = () => {
+  const { t } = useTranslation();
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -47,6 +49,13 @@ export const LiveMeditation: React.FC = () => {
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
       
       // Connect to Live API
+      const timeoutId = setTimeout(() => {
+        if (isConnecting) {
+          console.error("Live API connection timeout");
+          cleanup();
+        }
+      }, 10000);
+
       const sessionPromise = ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-09-2025",
         config: {
@@ -60,6 +69,7 @@ export const LiveMeditation: React.FC = () => {
         },
         callbacks: {
           onopen: async () => {
+            clearTimeout(timeoutId);
             setIsConnected(true);
             setIsConnecting(false);
             
@@ -208,12 +218,12 @@ export const LiveMeditation: React.FC = () => {
 
             <div className="max-w-md mx-auto">
               <h2 className="text-2xl font-serif font-bold mb-4">
-                {isConnected ? "正在与禅师对话..." : isConnecting ? "正在连接智慧之源..." : "开启实时语音引导"}
+                {isConnected ? t('connected') : isConnecting ? t('connecting') : t('live_meditation_title')}
               </h2>
               <p className="text-sm text-zen-accent/60 leading-relaxed mb-10">
                 {isConnected 
-                  ? "请放松呼吸，您可以随时向禅师提问或分享您的感受。" 
-                  : "通过实时语音，禅师将根据您的状态为您提供个性化的冥想引导。"}
+                  ? t('live_guide_desc_connected') 
+                  : t('live_guide_desc_disconnected')}
               </p>
 
               <div className="flex items-center justify-center gap-4">
@@ -223,7 +233,7 @@ export const LiveMeditation: React.FC = () => {
                     disabled={isConnecting}
                     className="bg-zen-accent text-white px-10 py-4 rounded-full font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2 disabled:opacity-50"
                   >
-                    {isConnecting ? "连接中..." : "开始对话"}
+                    {isConnecting ? t('connecting_btn') : t('start_conversation')}
                   </button>
                 ) : (
                   <>
@@ -240,7 +250,7 @@ export const LiveMeditation: React.FC = () => {
                       onClick={cleanup}
                       className="bg-zen-ink text-white px-8 py-4 rounded-full font-bold shadow-lg hover:bg-black transition-colors"
                     >
-                      结束对话
+                      {t('end_conversation')}
                     </button>
                   </>
                 )}
@@ -253,7 +263,7 @@ export const LiveMeditation: React.FC = () => {
         <div className="space-y-6">
           <div className="bg-white rounded-[32px] p-6 shadow-sm border border-zen-accent/5 h-[500px] flex flex-col">
             <div className="flex items-center justify-between mb-4 px-2">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-zen-accent/40">智慧语录</h3>
+              <h3 className="text-sm font-bold uppercase tracking-widest text-zen-accent/40">{t('wisdom_quotes')}</h3>
               <div className="w-2 h-2 rounded-full bg-zen-accent animate-pulse" />
             </div>
             
@@ -261,7 +271,7 @@ export const LiveMeditation: React.FC = () => {
               {transcript.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center p-6 opacity-30 italic text-xs">
                   <MessageCircle className="w-8 h-8 mb-4" />
-                  <p>对话开始后，禅师的教诲将记录于此。</p>
+                  <p>{t('transcript_placeholder')}</p>
                 </div>
               ) : (
                 transcript.map((msg, i) => (
@@ -280,7 +290,7 @@ export const LiveMeditation: React.FC = () => {
                       "font-bold mb-1 uppercase tracking-tighter text-[8px]",
                       msg.role === 'user' ? "text-zen-accent/40" : "text-zen-accent"
                     )}>
-                      {msg.role === 'user' ? "您" : "禅师"}
+                      {msg.role === 'user' ? t('you') : t('zen_master')}
                     </p>
                     {msg.text}
                   </motion.div>
@@ -292,12 +302,12 @@ export const LiveMeditation: React.FC = () => {
           <div className="bg-amber-50 p-6 rounded-[32px] border border-amber-100">
             <h4 className="text-xs font-bold text-amber-800 mb-2 flex items-center gap-2">
               <Sparkles className="w-3 h-3" />
-              使用建议
+              {t('usage_tips')}
             </h4>
             <ul className="text-[10px] text-amber-700/80 space-y-2 leading-relaxed">
-              <li>• 找一个安静的环境，佩戴耳机效果更佳。</li>
-              <li>• 您可以对禅师说：“我感到很有压力”或“请引导我放松”。</li>
-              <li>• 禅师会实时倾听并回应您的呼吸与心声。</li>
+              <li>• {t('tip_1')}</li>
+              <li>• {t('tip_2')}</li>
+              <li>• {t('tip_3')}</li>
             </ul>
           </div>
         </div>

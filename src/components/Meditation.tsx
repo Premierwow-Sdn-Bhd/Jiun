@@ -2,15 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play, Pause, Wind, Music, Volume2, Timer, Sparkles, Upload, FileAudio, Trash2, Edit2, ArrowUpDown, SortAsc, Clock, Check, X, Link as LinkIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useTranslation } from '../i18n';
+import { practiceService } from '../services/practiceService';
 
 const TRACKS: any[] = [];
 
-export const Meditation: React.FC = () => {
+export const Meditation: React.FC<{ onFinish?: (session: any) => void }> = ({ onFinish }) => {
+  const { t } = useTranslation();
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTrack, setCurrentTrack] = useState<any>(null);
   const [timeLeft, setTimeLeft] = useState(15 * 60);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [breathingText, setBreathingText] = useState("吸气");
+  const [breathingText, setBreathingText] = useState(t('inhale'));
   const [audioError, setAudioError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [localTracks, setLocalTracks] = useState<any[]>([]);
@@ -24,10 +27,19 @@ export const Meditation: React.FC = () => {
   const [importUrl, setImportUrl] = useState("");
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
+  const [isLooping, setIsLooping] = useState(true);
+  const [showDedicationModal, setShowDedicationModal] = useState(false);
+  const [sessionDuration, setSessionDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // IndexedDB setup for persistent audio storage
+  // Sound effect for completion
+  const completionSoundRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    completionSoundRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); // Gentle bell sound
+    completionSoundRef.current.volume = 0.5;
+  }, []);
   const DB_NAME = 'ZenMeditationDB';
   const STORE_NAME = 'tracks';
 
@@ -134,7 +146,7 @@ export const Meditation: React.FC = () => {
     if (!file) return;
 
     if (!file.type.startsWith('audio/')) {
-      setAudioError("请选择有效的音频文件（如 MP3）。");
+      setAudioError(t('invalid_audio'));
       return;
     }
 
@@ -142,9 +154,9 @@ export const Meditation: React.FC = () => {
     const newTrack = {
       id: `local-${file.name}-${file.size}`,
       title: file.name.replace(/\.[^/.]+$/, ""),
-      description: "本地上传音频",
+      description: t('local_upload'),
       url: url,
-      duration: "未知",
+      duration: t('unknown_duration'),
       isLocal: true
     };
 
@@ -247,10 +259,10 @@ export const Meditation: React.FC = () => {
     const fixedUrl = fixGoogleDriveUrl(importUrl.trim());
     const newTrack = {
       id: `url-${Date.now()}`,
-      title: "导入音频 " + new Date().toLocaleTimeString(),
-      description: "网络导入音频",
+      title: t('import_audio') + " " + new Date().toLocaleTimeString(),
+      description: t('network_import'),
       url: fixedUrl,
-      duration: "未知",
+      duration: t('unknown_duration'),
       isLocal: true,
       isUrl: true
     };
@@ -275,13 +287,13 @@ export const Meditation: React.FC = () => {
     let interval: any;
     if (isPlaying) {
       interval = setInterval(() => {
-        setBreathingText(prev => prev === "吸气" ? "呼气" : "吸气");
+        setBreathingText(prev => prev === t('inhale') ? t('exhale') : t('inhale'));
       }, 4000); // 4 seconds inhale, 4 seconds exhale
     } else {
-      setBreathingText("吸气");
+      setBreathingText(t('inhale'));
     }
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [isPlaying, t]);
 
   useEffect(() => {
     let interval: any;
@@ -289,12 +301,31 @@ export const Meditation: React.FC = () => {
       interval = setInterval(() => {
         setTimeLeft(prev => prev - 1);
       }, 1000);
-    } else if (timeLeft === 0) {
+    } else if (timeLeft === 0 && isTimerRunning) {
       setIsTimerRunning(false);
       setIsPlaying(false);
+      if (audioRef.current) audioRef.current.pause();
+      
+      // Play completion sound
+      if (completionSoundRef.current) {
+        completionSoundRef.current.play().catch(e => {
+          console.error("Failed to play completion sound", e);
+          // Fallback: try playing a new audio instance if the ref one fails
+          const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+          audio.play().catch(e2 => console.error("Fallback sound failed", e2));
+        });
+      }
+
+      // Record practice progress
+      practiceService.updateActivity('meditation', selectedDuration);
+      practiceService.logMerit('meditation');
+
+      // Show dedication modal
+      setSessionDuration(selectedDuration);
+      setShowDedicationModal(true);
     }
     return () => clearInterval(interval);
-  }, [isTimerRunning, timeLeft]);
+  }, [isTimerRunning, timeLeft, selectedDuration]);
 
   const togglePlay = () => {
     setIsPlaying(!isPlaying);
@@ -368,6 +399,7 @@ export const Meditation: React.FC = () => {
       try {
         if (isPlaying) {
           setAudioError(null);
+          // Add a small delay and user interaction check
           await audio.play();
         } else {
           audio.pause();
@@ -377,7 +409,12 @@ export const Meditation: React.FC = () => {
           // AbortError is expected when play() is interrupted by pause()
           if (err.name !== 'AbortError') {
             console.error("Audio play failed:", err.message);
-            setAudioError("播放失败: " + err.message);
+            // If autoplay is blocked, show a message or try to recover
+            if (err.name === 'NotAllowedError') {
+                setAudioError(t('click_to_play' as any));
+            } else {
+                setAudioError(t('play_failed' as any) + err.message);
+            }
             setIsPlaying(false);
             setIsTimerRunning(false);
           }
@@ -394,11 +431,84 @@ export const Meditation: React.FC = () => {
 
   return (
     <div className="w-full max-w-4xl mx-auto">
+      <AnimatePresence>
+        {showDedicationModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-md rounded-[40px] p-8 shadow-2xl border border-zen-accent/10 relative max-h-[85vh] flex flex-col"
+            >
+              <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-zen-accent/5 to-transparent pointer-events-none" />
+              
+              <div className="text-center mb-8 relative z-10 flex-shrink-0">
+                <div className="w-16 h-16 bg-zen-accent text-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg shadow-zen-accent/20">
+                  <Check className="w-8 h-8" />
+                </div>
+                <h2 className="text-2xl font-serif font-bold text-zen-ink mb-2">{t('meditation_completed')}</h2>
+                <p className="text-zen-accent/60 text-sm">{t('meditation_title')}</p>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-6 relative z-10">
+                <div className="bg-zen-bg/50 p-6 rounded-3xl text-center">
+                  <p className="text-xs text-zen-accent/50 uppercase tracking-widest font-bold mb-2">{t('session_duration')}</p>
+                  <p className="text-3xl font-serif font-bold text-zen-accent">{sessionDuration} {t('minutes')}</p>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-center font-bold text-zen-accent/80 text-sm">{t('dedication')}</h3>
+                  <div className="bg-zen-bg/30 p-4 rounded-2xl border border-zen-accent/5">
+                    <p className="text-center font-serif text-zen-ink/80 whitespace-pre-wrap leading-relaxed text-sm">
+                      {JSON.parse(localStorage.getItem('zen_meditation_dedications') || '[]').find((d: any) => d.isDefault)?.content || t('default_meditation_dedication')}
+                    </p>
+                  </div>
+                  
+                  <h3 className="text-center font-bold text-zen-accent/80 text-sm mt-4">发愿</h3>
+                  <div className="bg-zen-bg/30 p-4 rounded-2xl border border-zen-accent/5">
+                    <p className="text-center font-serif text-zen-ink/80 whitespace-pre-wrap leading-relaxed text-sm">
+                      {JSON.parse(localStorage.getItem('zen_vows') || '[]').find((v: any) => v.isDefault)?.content || '愿以此禅修功德，回向法界众生，身心清净，福慧增长。'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-6 mt-auto flex-shrink-0 relative z-10">
+                <button
+                  onClick={() => {
+                    practiceService.updateActivity('dedication', true);
+                    setShowDedicationModal(false);
+                    if (onFinish) {
+                      const dedication = JSON.parse(localStorage.getItem('zen_meditation_dedications') || '[]').find((d: any) => d.isDefault)?.content || t('default_meditation_dedication');
+                      const vow = JSON.parse(localStorage.getItem('zen_vows') || '[]').find((v: any) => v.isDefault)?.content || '愿以此禅修功德，回向法界众生，身心清净，福慧增长。';
+                      onFinish({
+                        duration: sessionDuration,
+                        trackTitle: currentTrack?.title || '未知音频',
+                        dedication: dedication,
+                        vow: vow
+                      });
+                    }
+                  }}
+                  className="w-full bg-zen-accent text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-opacity shadow-lg shadow-zen-accent/20"
+                >
+                  {t('finish')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {currentTrack && (
         <audio 
           ref={audioRef} 
           src={currentTrack.url} 
-          loop 
+          loop={isLooping}
           preload="auto"
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={() => {
@@ -429,9 +539,9 @@ export const Meditation: React.FC = () => {
             const error = target.error;
             console.error("Audio element error:", error?.message || "Unknown error");
             
-            let message = "音频加载失败。这通常是由于链接权限、格式不支持或文件过大导致的。";
+            let message = t('audio_load_fail');
             if (error?.code === 4 || (currentTrack.url.includes('drive.google.com') && !isLoading)) { 
-              message = "音频格式不受支持或无法直接加载。对于 Google Drive 链接，这通常是因为浏览器需要您先手动确认一次下载权限（即使文件小于100MB）。";
+              message = t('audio_format_error');
             }
             
             setAudioError(message);
@@ -495,7 +605,7 @@ export const Meditation: React.FC = () => {
               )}
             </AnimatePresence>
 
-            <div className="relative z-10 w-full">
+            <div className="relative z-10 w-full group">
               {!isPlaying && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
@@ -505,8 +615,8 @@ export const Meditation: React.FC = () => {
                   <div className="w-20 h-20 bg-zen-accent/10 rounded-3xl flex items-center justify-center mx-auto mb-6">
                     <Wind className="w-10 h-10 text-zen-accent" />
                   </div>
-                  <h2 className="text-3xl font-serif font-bold mb-2">{currentTrack?.title || "请上传音频"}</h2>
-                  <p className="text-zen-accent/60 italic mb-2">{currentTrack?.description || "点击右侧上传您的静心音乐"}</p>
+                  <h2 className="text-3xl font-serif font-bold mb-2">{currentTrack?.title || t('please_upload')}</h2>
+                  <p className="text-zen-accent/60 italic mb-2">{currentTrack?.description || t('click_to_upload')}</p>
                   {currentTrack && lastSavedProgress[currentTrack.id] && (
                     <motion.div 
                       initial={{ opacity: 0 }}
@@ -515,7 +625,7 @@ export const Meditation: React.FC = () => {
                     >
                       <div className="flex items-center gap-1">
                         <Timer className="w-2.5 h-2.5" />
-                        <span>已为您自动恢复上次进度</span>
+                        <span>{t('restore_progress')}</span>
                       </div>
                       <button 
                         onClick={(e) => {
@@ -525,7 +635,7 @@ export const Meditation: React.FC = () => {
                         }}
                         className="text-[9px] underline opacity-60 hover:opacity-100"
                       >
-                        从头开始
+                        {t('start_from_beginning')}
                       </button>
                     </motion.div>
                   )}
@@ -538,27 +648,6 @@ export const Meditation: React.FC = () => {
               )}>
                 {formatTime(timeLeft)}
               </div>
-
-              {/* Audio Progress Bar */}
-              {currentTrack && audioDuration > 0 && (
-                <div className="w-full max-w-xs mx-auto mb-8 space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold text-zen-accent/40 tabular-nums">
-                    <span>{formatTime(Math.floor(audioCurrentTime))}</span>
-                    <span>{formatTime(Math.floor(audioDuration))}</span>
-                  </div>
-                  <div className="relative group h-6 flex items-center">
-                    <input 
-                      type="range"
-                      min="0"
-                      max={audioDuration}
-                      step="0.1"
-                      value={audioCurrentTime}
-                      onChange={handleSeek}
-                      className="w-full h-1 bg-zen-bg rounded-full appearance-none cursor-pointer accent-zen-accent group-hover:h-1.5 transition-all"
-                    />
-                  </div>
-                </div>
-              )}
 
               {!isPlaying && (
                 <div className="flex flex-wrap items-center justify-center gap-2 mb-10">
@@ -579,30 +668,72 @@ export const Meditation: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center justify-center gap-6">
-                <button 
-                  onClick={togglePlay}
-                  disabled={!currentTrack || !!audioError || isLoading}
-                  className={cn(
-                    "w-20 h-20 rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform relative z-30",
-                    (!currentTrack || audioError || isLoading) ? "bg-gray-300 cursor-not-allowed" : "bg-zen-accent text-white"
-                  )}
-                >
-                  {isLoading ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full"
-                      />
-                      <span className="text-[10px] font-bold opacity-50">加载中...</span>
+              <div className={cn(
+                "transition-opacity duration-500",
+                isPlaying ? "opacity-0 group-hover:opacity-100" : "opacity-100"
+              )}>
+                <div className="flex items-center justify-center gap-6 mb-8">
+                  <button 
+                    onClick={togglePlay}
+                    disabled={!currentTrack || !!audioError || isLoading}
+                    className={cn(
+                      "w-20 h-20 rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform relative z-30",
+                      (!currentTrack || audioError || isLoading) ? "bg-gray-300 cursor-not-allowed" : "bg-zen-accent text-white"
+                    )}
+                  >
+                    {isLoading ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full"
+                        />
+                        <span className="text-[10px] font-bold opacity-50">{t('loading')}</span>
+                      </div>
+                    ) : isPlaying ? (
+                      <Pause className="w-8 h-8 fill-current" />
+                    ) : (
+                      <Play className="w-8 h-8 fill-current ml-1" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Audio Progress Bar & Controls - Moved here */}
+                {currentTrack && audioDuration > 0 && (
+                  <div className="w-full max-w-xs mx-auto space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-[10px] font-bold text-zen-accent/40 tabular-nums">
+                        <span>{formatTime(Math.floor(audioCurrentTime))}</span>
+                        <span>{formatTime(Math.floor(audioDuration))}</span>
+                      </div>
+                      <div className="relative group/bar h-6 flex items-center">
+                        <input 
+                          type="range"
+                          min="0"
+                          max={audioDuration}
+                          step="0.1"
+                          value={audioCurrentTime}
+                          onChange={handleSeek}
+                          className="w-full h-1 bg-zen-bg rounded-full appearance-none cursor-pointer accent-zen-accent group-hover/bar:h-1.5 transition-all"
+                        />
+                      </div>
                     </div>
-                  ) : isPlaying ? (
-                    <Pause className="w-8 h-8 fill-current" />
-                  ) : (
-                    <Play className="w-8 h-8 fill-current ml-1" />
-                  )}
-                </button>
+                    
+                    {/* Loop Toggle */}
+                    <div className="flex justify-center">
+                      <button
+                        onClick={() => setIsLooping(!isLooping)}
+                        className={cn(
+                          "flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-bold transition-colors",
+                          isLooping ? "bg-zen-accent/10 text-zen-accent" : "text-zen-accent/40 hover:text-zen-accent/60"
+                        )}
+                      >
+                        <ArrowUpDown className="w-3 h-3" />
+                        {isLooping ? t('loop_play') : t('single_play')}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {audioError && (
@@ -613,9 +744,7 @@ export const Meditation: React.FC = () => {
                 >
                   <p className="mb-2">{audioError}</p>
                   <p className="mb-4 text-[10px] opacity-70 leading-relaxed">
-                    注意：Google Drive 链接在网页播放器中直接加载时，有时会被浏览器的安全策略拦截。
-                    请点击下方按钮，在弹出的页面中确认下载（或播放）一次，这会为您的浏览器提供必要的授权。
-                    授权后，返回此处点击“重试”即可正常播放。
+                    {t('audio_load_fail')}
                   </p>
                   <div className="flex flex-col gap-2">
                     <a 
@@ -624,7 +753,7 @@ export const Meditation: React.FC = () => {
                       rel="noopener noreferrer"
                       className="inline-flex items-center justify-center gap-2 bg-red-600 text-white py-2 px-4 rounded-xl font-bold hover:bg-red-700 transition-colors"
                     >
-                      在新标签页中打开并授权
+                      {t('open_in_new_tab')}
                     </a>
                     <button 
                       onClick={() => {
@@ -634,7 +763,7 @@ export const Meditation: React.FC = () => {
                       }}
                       className="text-[10px] text-red-600/60 underline"
                     >
-                      授权后点击重试
+                      {t('retry_after_auth')}
                     </button>
                   </div>
                 </motion.div>
@@ -643,7 +772,7 @@ export const Meditation: React.FC = () => {
               {!isPlaying && (
                 <div className="mt-12 flex items-center justify-center gap-2 text-xs text-zen-accent/40 font-bold uppercase tracking-widest">
                   <Sparkles className="w-3 h-3" />
-                  <span>准备好开启这段静心之旅吗？</span>
+                  <span>{t('meditation_ready')}</span>
                 </div>
               )}
             </div>
@@ -667,7 +796,7 @@ export const Meditation: React.FC = () => {
         <div className="space-y-6">
           <div className="flex items-center justify-between px-2">
             <div className="flex items-center gap-3">
-              <h3 className="text-lg font-bold">禅修引导</h3>
+              <h3 className="text-lg font-bold">{t('meditation_title')}</h3>
               <div className="flex items-center bg-zen-bg rounded-lg p-1">
                 <button 
                   onClick={() => setSortOrder('newest')}
@@ -675,7 +804,7 @@ export const Meditation: React.FC = () => {
                     "p-1.5 rounded-md transition-all",
                     sortOrder === 'newest' ? "bg-white text-zen-accent shadow-sm" : "text-zen-accent/40 hover:text-zen-accent/60"
                   )}
-                  title="按时间排序"
+                  title={t('sort_by_time')}
                 >
                   <Clock className="w-3.5 h-3.5" />
                 </button>
@@ -685,7 +814,7 @@ export const Meditation: React.FC = () => {
                     "p-1.5 rounded-md transition-all",
                     sortOrder === 'name' ? "bg-white text-zen-accent shadow-sm" : "text-zen-accent/40 hover:text-zen-accent/60"
                   )}
-                  title="按名称排序"
+                  title={t('sort_by_name')}
                 >
                   <SortAsc className="w-3.5 h-3.5" />
                 </button>
@@ -699,22 +828,13 @@ export const Meditation: React.FC = () => {
                 accept="audio/*" 
                 className="hidden" 
               />
-              <button 
-                onClick={() => setShowUrlInput(!showUrlInput)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-bold transition-colors",
-                  showUrlInput ? "bg-zen-accent text-white" : "bg-zen-accent/10 text-zen-accent hover:bg-zen-accent/20"
-                )}
-              >
-                <LinkIcon className="w-3 h-3" />
-                导入链接
-              </button>
+              {/* Import Link button hidden as requested */}
               <button 
                 onClick={() => fileInputRef.current?.click()}
                 className="flex items-center gap-2 bg-zen-accent/10 text-zen-accent px-3 py-1.5 rounded-xl text-[10px] font-bold hover:bg-zen-accent/20 transition-colors"
               >
                 <Upload className="w-3 h-3" />
-                上传本地 MP3
+                {t('upload_audio')}
               </button>
             </div>
           </div>
@@ -732,14 +852,14 @@ export const Meditation: React.FC = () => {
                     type="text"
                     value={importUrl}
                     onChange={(e) => setImportUrl(e.target.value)}
-                    placeholder="粘贴音频链接 (支持 Google Drive)..."
+                    placeholder={t('paste_audio_link')}
                     className="flex-1 bg-zen-bg border-none rounded-xl px-4 py-2 text-xs focus:ring-1 focus:ring-zen-accent outline-none"
                   />
                   <button
                     onClick={handleUrlImport}
                     className="bg-zen-accent text-white px-4 py-2 rounded-xl text-xs font-bold hover:opacity-90 transition-opacity"
                   >
-                    导入
+                    {t('import_btn')}
                   </button>
                 </div>
               </motion.div>
@@ -837,7 +957,7 @@ export const Meditation: React.FC = () => {
                     ) : (
                       <div className="p-10 border-2 border-dashed border-zen-accent/10 rounded-[40px] text-center">
                         <Music className="w-10 h-10 text-zen-accent/10 mx-auto mb-4" />
-                        <p className="text-xs text-zen-accent/40 font-bold">暂无曲目，请上传您的 MP3</p>
+                        <p className="text-xs text-zen-accent/40 font-bold">{t('no_track')}</p>
                       </div>
                     )}
                   </div>
@@ -846,7 +966,7 @@ export const Meditation: React.FC = () => {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <Timer className="w-5 h-5 text-zen-accent" />
-                <h4 className="font-bold text-sm">禅修建议</h4>
+                <h4 className="font-bold text-sm">{t('meditation_guide_title')}</h4>
               </div>
               <div className="flex items-center gap-1 bg-zen-accent/10 px-2 py-1 rounded-lg text-[8px] font-bold text-zen-accent animate-pulse">
                 <Sparkles className="w-2 h-2" />
@@ -854,17 +974,9 @@ export const Meditation: React.FC = () => {
               </div>
             </div>
             <p className="text-xs leading-relaxed text-zen-accent/70 italic mb-6">
-              “禅修不在于寻找什么，而在于放下什么。请寻找一个安静的角落，挺直脊背，闭上双眼，将注意力轻轻地放在呼吸上。当杂念生起，只需觉察它，然后温柔地回到呼吸。”
+              {t('meditation_guide_text')}
             </p>
             <div className="pt-6 border-t border-zen-accent/10">
-              <p className="text-[10px] text-zen-accent/40 uppercase tracking-widest font-bold mb-3">想要更深度的引导？</p>
-              <button 
-                onClick={() => window.dispatchEvent(new CustomEvent('switchTab', { detail: 'live' }))}
-                className="w-full bg-white border border-zen-accent/20 py-3 rounded-2xl text-xs font-bold text-zen-accent hover:bg-zen-accent hover:text-white transition-all flex items-center justify-center gap-2"
-              >
-                <Sparkles className="w-3 h-3" />
-                开启 AI 实时语音引导
-              </button>
             </div>
           </div>
         </div>
